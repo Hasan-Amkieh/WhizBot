@@ -9,7 +9,7 @@ let all_commands = { // a command to description relation
     "!remind all on *[prayers]*" : "Automatically mentions eveyone before the chosen prayers by 5 minutes",
     "!remind *[all]* at *[time]*" : "Calls the sender of the message at the specificied *time*, if *all* is set, then all it will be a group call instead",
     "!get reminders for this chat" : "Returns all reminders set inside this chat",
-    "!delete reminder *[reminder ID]*" : "Deletes the reminder using the reminder ID",
+    "!delete reminder *[reminder ID]*" : "Deletes the reminder using the reminder",
 }
 
 let __version__ = "1.0.0";
@@ -22,7 +22,7 @@ let all_reminders = [] // this will hold all the reminders for the whole applica
 
 let last_prayer_update = new Date().getDate();
 
-const axios = require("axios");
+import * as axios from "axios";
 
 async function get_all_prayers(city = "ankara") {
 
@@ -63,9 +63,9 @@ function summarize_prayers(obj) {
     return answer;
 }
 
-const qrcode = require('qrcode-terminal');
-const WAWebJS = require("whatsapp-web.js");
-const {Client, LocalAuth} = require('whatsapp-web.js')
+import * as qrcode from 'qrcode-terminal'
+import * as WAWebJS from "whatsapp-web.js"
+import {Client, LocalAuth} from 'whatsapp-web.js'
 
 const client = new Client({
     authStrategy: new LocalAuth()
