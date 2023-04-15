@@ -1,33 +1,41 @@
 
-let all_commands = { // a command to description relation
-    "!commands" : "Get the list of all commands with an explanation",
-    "!about" : "Get general information/statistics about the WhizBot",
-    "!get all prayers " : "Get the upcoming prayers for Turkey/Ankara",
-    "!get all prayers for *[city]*" : "get all the upcoming prayers for the chosen *city*",
-    "!mention all" : "mentions everyone inside the group",
-    "!remind all on prayers" : "Automatically mentions eveyone before the prayer by 5 minutes",
-    "!remind all on *[prayers]*" : "Automatically mentions eveyone before the chosen prayers by 5 minutes",
-    "!remind *[all]* at *[time]*" : "Calls the sender of the message at the specificied *time*, if *all* is set, then all it will be a group call instead",
-    "!get reminders for this chat" : "Returns all reminders set inside this chat",
-    "!delete reminder *[reminder ID]*" : "Deletes the reminder using the reminder ID",
-}
+let all_commands = [ // a command to description relation
+    "1.  !commands - Get the list of all commands with an explanation",
+    "2.  !about - Get general information/statistics about the WhizBot",
+    "3.  !get all prayers - Get the upcoming prayers for Turkey/Ankara",
+    "4.  !get all prayers for *[city]* - Get all the upcoming prayers for the chosen *city*",
+    "5.  !mention all - Mentions everyone inside the group",
+    "6.  !remind *[all]* on prayers for *[for [city]]* - Automatically reminds after the prayer by 5 minutes, if *all* is set everyone will be menitoned",
+    "7.  !remind *[all]* on *[prayers]* *[for [city]]* - Automatically reminds after the chosen prayers by 5 minutes, if *all* is set everyone will be menitoned",
+    "8.  !remind *[all]* at *[time]* - Reminds once at the specificied *time*, if *all* is set then all will be mentioned, \nExample: '!remind all at 21/4 15:17'",
+    "9.  !remind *[all]* after *[time]* - Reminds once after *time*. Example: remind after 2d 3h 5m . d for days, h for hours and m for minutes",
+    "10. !get all reminders - Returns all reminders set inside this chat only",
+    "11. !delete reminder *[reminder ID]* - Deletes the reminder using the reminder",
+]
+  
+  const __version__ = "1.1.0";
+  var started_running_at = new Date();
+  let command_count = 0;
+  
+  let np_reminders = {} // this will hold all non-prayer reminders for the whole application, these reminders are referred as np_reminders (np - non-prayer)
+  // The structure is the following: [Date Object, Chat Object, text of mentions for participants, Array of Contacts to be mentioned]
 
-let __version__ = "1.0.0";
-var started_running_at = new Date();
-let command_count = 0;
+  let p_reminders = {} // These reminders are referred as p_reminders (p - prayers)
+  // The structure is the following: [city, Chat Object, Array of Contacts to be mentioned, Array of Prayers]
 
-let all_reminders = [] // this will hold all the reminders for the whole application
-// The structure is the following: 
-// [ID, Date Object, Chat Object, Array of Contacts to be mentioned]
+  let prayers = ["fajr", "dhuhr", "asr", "maghrib", "isha"]
+  let upcoming_prayer_indices = {}; // {ID_ : index}
+  
+  prayers_details_by_city = {}; // {city : [last_prayer_update, prayers_info]}
 
-let last_prayer_update = new Date().getDate();
+  const axios = require("axios");
 
-const axios = require("axios");
-
-async function get_all_prayers(city = "ankara") {
-
+  const moment = require("./moment.js")
+  
+  async function get_all_prayers(city = "ankara") {
+  
     console.log("Getting info for the city " + city)
-
+  
     const options = {
         method: 'GET',
         url: 'https://muslimsalat.p.rapidapi.com/' + city + '.json',
@@ -44,13 +52,19 @@ async function get_all_prayers(city = "ankara") {
           console.error(error);
       });
 
-      last_prayer_update = new Date().getTime();
+      let str = response_['items'][0]['date_for'].split('-'); // ex. 2023-4-15
+  
+      let last_prayer_update = new Date(Number(str[0]), Number(str[1]) - 1, Number(str[2]));
 
+      prayers_details_by_city[city] = [last_prayer_update, summarize_prayers(response_)];
+
+      console.log(`last prayer update ${last_prayer_update.getTime()}`)
+  
       return response_;
-}
-
-function summarize_prayers(obj) {
-
+  }
+  
+  function summarize_prayers(obj) {
+  
     let answer = obj['country_code'] + "/" + obj['query'] + ' on *' + obj['items'][0]['date_for'] + '*\n';
     
     let prayers = obj['items'][0];
@@ -59,33 +73,208 @@ function summarize_prayers(obj) {
     str.split("\n").forEach(prayer => {
         answer += prayer.replace(":", " - ") + "\n";
     });
-
+  
     return answer;
-}
+  }
 
-const qrcode = require('qrcode-terminal');
-const WAWebJS = require("whatsapp-web.js");
-const {Client, LocalAuth} = require('whatsapp-web.js')
+  function get_about_msg() {
 
-const client = new Client({
+    return 'I am a multi-purpose Whatsapp Chatbot designed by *Hasan Amkieh* named *WhizBot*\n\n'+
+    'I was designed using the whatsapp-web package, deployed on Deno\n\n'+
+    `Served Commands: *${command_count}*\nTotal minutes of runtime: *${runtime_mins}*\n`+
+    `Version: *${__version__}*\n\n`+
+    `To get all the commands I support just hit me with *!commands*\n\n` +
+    "Source Code: https://github.com/Hasan-Amkieh/WhizBot/blob/main/index.js"
+
+  }
+
+  async function get_next_prayer_date(city = 'ankara')  { // Returns [prayer index, prayer Date]
+
+    if (typeof prayers_details_by_city[city] == "undefined"
+        || (new Date().getTime() - prayers_details_by_city[city][0].getTime()) >= 86400000) { // if the date is one day ago, then it shall be update
+        await get_all_prayers(city); // This will automatically update the last_prayer_update and prayers_details
+    }
+
+    prayers_times_ = [];
+    for (let i = 0 ; i < 5 ; i++) {
+        prayers_times_.push(new Date())
+    }
+
+    // 1. Get all the prayers needed (1, 3, 4, 5, 6 indices) and their times converted into Date objects
+    let indices = [1, 3, 4, 5, 6];
+    prayers_info_ = prayers_details_by_city[city][1].split("\n");
+    let str;
+    let i = 0;
+    indices.forEach((index) => {
+        str = prayers_info_[index].split(" - ")[1];
+        let time = str.split(" ")[0].split(":");
+        prayers_times_[i].setHours(Number(time[0]) + (str.includes("pm") ? 12 : 0)); // If PM +12 / If AM +0
+        prayers_times_[i].setMinutes(Number(time[1]))
+        if ((Date.now() - prayers_times_[i].getTime()) > 0) {
+            prayers_times_[i] = moment(prayers_times_[i]).add(1, 'days').toDate();
+        }
+        i++;
+    })
+
+    // Check:
+    console.log("Prayer times:")
+    prayers_times_.forEach(p_time => {
+        console.log(`${moment(p_time).format("MMMM Do YYYY, h:mm:ss a")} \n`);
+    });
+
+    // 2. Determine the upcoming prayer by looping through two of the dates consecutivly,
+    let next_prayer_index = 0;
+    let now_ms = Date.now();
+    for (let index = -1 ; index < 4 ; index++) {
+        if ((now_ms - prayers_times_.at(index).getTime()) > 0 && (prayers_times_.at(index+1).getTime() - now_ms) < 0) {
+            next_prayer_index = index + 1;
+            break;
+        }
+    }
+
+    console.log(`prayer index: ${next_prayer_index}`)
+    console.log(`The next prayer time is ${moment(prayers_times_[next_prayer_index]).format("MMMM Do YYYY, h:mm:ss a")}`+
+    ` and the prayer name is ${prayers[next_prayer_index]}`)
+    return [next_prayer_index, prayers_times_[next_prayer_index]];
+
+  }
+
+  let process_p_reminder = async () => {
+        
+    prayer = upcoming_prayer_indices[ID_];
+    await (await client.getChatById(p_reminders[ID_][1])).sendMessage(`[${ID_}] Prayer ${prayer} time has come. ${p_reminders[ID_][2]}`, np_reminders[ID_][3]);
+    console.log("Length of of p_reminders: " + Object.keys(p_reminders).length)
+
+    await get_next_prayer_date(p_reminders[ID_][0]); // City
+    upcoming_prayer_indices[ID_] = obj[0];
+
+    setTimeout(process_p_reminder, obj[1].getTime() - new Date().getTime());
+
+  };
+
+  async function add_p_reminder(city, chat, mentions_text, msg_options, prayers_) { // [Chat Object, text of mentions for participants, Array of Contacts to be mentioned]
+
+    // 1. Find an empty ID:
+    // 1.1 first collect all the used IDs:
+    used_IDs = Object.keys(p_reminders);
+
+    console.log(JSON.stringify(used_IDs))
+
+    let ID_ = 0;
+    // 1.2: Find an empty ID from the lowest:
+    for (let ID = 1 ; ; ID++) {
+        ID_ = 0;
+        for (let index = 0 ; index < used_IDs.length ; index++) {
+            if (ID === Number(used_IDs[index])) {
+                ID_ = -1;
+                break;
+            }
+        }
+        if (ID_ === 0) {
+            ID_ = ID;
+            break;
+        }
+    }
+
+    console.log("Length of p_reminders is: " + ID_)
+
+    p_reminders[ID_] = [city, chat, mentions_text, msg_options, prayers_];
+
+    obj = await get_next_prayer_date(city);
+    upcoming_prayer_indices[ID_] = obj[0];
+
+    console.log(`index: ${obj[0]}`)
+    setTimeout(process_p_reminder, obj[1].getTime() - new Date().getTime());
+
+    obj.push(ID_)
+    return obj;
+
+  }
+
+  function add_np_reminder(date, chat, mentions_text, msg_options) { // [Date as String, Chat Object, text of mentions for participants, Array of Contacts to be mentioned]
+
+    // 1. Find an empty ID:
+    // 1.1 first collect all the used IDs:
+    used_IDs = Object.keys(np_reminders);
+
+    console.log(JSON.stringify(used_IDs))
+
+    let ID_ = 0;
+    // 1.2: Find an empty ID from the lowest:
+    for (let ID = 1 ; ; ID++) {
+        ID_ = 0;
+        for (let index = 0 ; index < used_IDs.length ; index++) {
+            if (ID === Number(used_IDs[index])) {
+                ID_ = -1;
+                break;
+            }
+        }
+        if (ID_ === 0) {
+            ID_ = ID;
+            break;
+        }
+    }
+
+    console.log("Length of reminders is: " + ID_)
+
+    np_reminders[ID_] = [date, chat, mentions_text, msg_options];
+
+    setTimeout(async () => {
+        
+        await (await client.getChatById(np_reminders[ID_][1])).sendMessage(`Reminder No. ${ID_} ${np_reminders[ID_][2]} is triggered`, np_reminders[ID_][3]);
+        delete np_reminders[ID_];
+        console.log("Length of of reminders: " + Object.keys(np_reminders).length)
+
+    }, date.getTime() - new Date().getTime());
+
+    return ID_;
+
+  }
+
+  function string_to_date(str_) { // Example:  4/14 19:17
+
+    let day, month, hours, minutes;
+    let i = 0;
+    str_.split(" ").forEach(element => {
+        if (i == 0) { // date:
+            let date__ = element.split("/");
+            day = date__[0];
+            month = date__[1];
+            i++;
+        } else { // time:
+            let time__ = element.split(":");
+            hours = time__[0];
+            minutes = time__[1];
+        }
+    });
+
+    return new Date(new Date().getFullYear(), month - 1, day, hours, minutes);
+
+  }
+  
+  const qrcode = require('qrcode-terminal')
+  const WAWebJS = require("whatsapp-web.js")
+  const {Client, LocalAuth} = require('whatsapp-web.js')
+  
+  const client = new Client({
     authStrategy: new LocalAuth()
-});
-
-client.on('qr', qr => {
+  });
+  
+  client.on('qr', qr => {
     qrcode.generate(qr, {small: true});
-});
-
-client.on('ready', () => {
+  });
+  
+  client.on('ready', () => {
     console.log('Client is ready!');
-});
-
-client.on('message', processMessage);
- 
-client.initialize();
-
-async function processMessage(message) {
+  });
+  
+  client.on('message', processMessage);
+  
+  client.initialize();
+  
+  async function processMessage(message) {
      
-	if (message.body[0] === '!') { // Then it is a command:
+  if (message.body[0] === '!') { // Then it is a command:
         if(message.body.toUpperCase() === '!Get All Prayers'.toUpperCase()) {
             ++command_count;
             received_result = false;
@@ -94,8 +283,8 @@ async function processMessage(message) {
             }).catch((err) => {
                 console.error(err);
             });
-
-            message.reply(summarize_prayers(response));
+  
+            await message.reply(summarize_prayers(response));
         } else if(message.body.toUpperCase().includes('!Get All Prayers for '.toUpperCase())) {
             ++command_count;
             received_result = false;
@@ -104,58 +293,124 @@ async function processMessage(message) {
             }).catch((err) => {
                 console.error(err);
             });
-
-            message.reply(summarize_prayers(response));
+  
+            await message.reply(summarize_prayers(response));
         } else if (message.body.toUpperCase() === '!About'.toUpperCase()) {
             ++command_count;
             let runtime_mins = new Date().getTime() - started_running_at.getTime();
             runtime_mins = runtime_mins / (1000.0 * 60.0);
             runtime_mins = runtime_mins.toFixed(2);
-            message.reply('I am a multi-purpose Whatsapp Chatbot designed by *Hasan Amkieh* named *WhizBot*\n\nI was designed using the whatsapp-web package, deployed on Deno\n\nServed Commands: *' + command_count + '*\n' + 'Total minutes of runtime: *' + runtime_mins + '*' + '\nVersion: *' + __version__ + '*\n\nTo get all the commands I support just hit me with *!commands*');
+            await message.reply(get_about_msg());
         } else if (message.body.toUpperCase() === '!Commands'.toUpperCase()) {
-            answer = JSON.stringify(all_commands).replaceAll("{", "").replaceAll("}", "").replaceAll(":", " - ").replaceAll(",", "\n\n");
-            answer = answer.replaceAll('"', '');
-            message.reply(answer);
+            answer = "";
+            all_commands.forEach(element => {
+                answer += element + "\n\n";
+            });
+
+            await message.reply(answer);
         } else if (message.body.toUpperCase() === '!mention all'.toUpperCase()) {
-            let chatID = message.from;
-            let groupChat = await client.getChatById(chatID); 
-                    
-            let text = "";
-            let mentions = [];
-
-            for(let participant of groupChat.participants) {
-                const contact = await client.getContactById(participant.id._serialized);
-            
-                mentions.push(contact);
-                text += `@${participant.id.user} `;
-            }
-
-            await groupChat.sendMessage(text, { mentions });
-
-        } else if (message.body.toUpperCase() === '!remind all on prayers'.toUpperCase()) {
             let chatID = message.from;
             let groupChat = await client.getChatById(chatID);
                     
             let text = "";
             let mentions = [];
-
+  
             for(let participant of groupChat.participants) {
                 const contact = await client.getContactById(participant.id._serialized);
             
                 mentions.push(contact);
                 text += `@${participant.id.user} `;
             }
-
+  
             await groupChat.sendMessage(text, { mentions });
+        } else if (message.body.toUpperCase().includes('!REMIND') && message.body.toUpperCase().includes('ON PRAYERS')) { // command no.6
+            // ex.: !remind all on prayers for ankara
 
+            let chatID = message.from;
+            let groupChat = await client.getChatById(chatID);
+            let arr_ = message.body.split(' ');
+            
+            let mentions = [];
+            let mentions_text = "";
+
+            if (message.body.toUpperCase().includes('ALL')) {
+                for(let participant of groupChat.participants) {
+                    mentions.push(await client.getContactById(participant.id._serialized));
+                    mentions_text += `@${participant.id.user} `;
+                }
+            }
+
+            city = message.body.toUpperCase().split("FOR ")[1].toLowerCase()
+            obj = await add_p_reminder(city, chatID, mentions_text, {mentions}, prayers);
+            let next_prayer = obj[1];
+            await message.reply(`A new reminder was created with the number *${obj[2]}*,`+
+            ` *${prayers[obj[0]]}* to be reminded at ${next_prayer.getHours()}:${next_prayer.getMinutes()}`);
+
+        } else if (message.body.toUpperCase().includes('!REMIND') && message.body.toUpperCase().includes('AT')) { // command no.8
+            // Example: !remind all at 14/4 19:17
+            let chatID = message.from;
+            let groupChat = await client.getChatById(chatID);
+            let arr_ = message.body.split(' ');
+            
+            let mentions = [];
+            let mentions_text = "";
+            let is_all = message.body.toUpperCase().includes('ALL');
+
+            if (is_all) {
+                for(let participant of groupChat.participants) {
+                    mentions.push(await client.getContactById(participant.id._serialized));
+                    mentions_text += `@${participant.id.user} `;
+                }
+            }
+
+            time_string = arr_[is_all ? 3 : 2] + " " + arr_[is_all ? 4 : 3];
+            console.log("The time string happened to be: " + time_string)
+            let next_date = string_to_date(time_string);
+            reminder_ID = add_np_reminder(next_date, chatID, mentions_text, {mentions});
+  
+            await message.reply(`A new reminder was created with the number *${reminder_ID}*, to be reminded at ${next_date.toLocaleDateString("en-GB") + ` ${next_date.getHours()}:${next_date.getMinutes()}`}`);
+        } 
+        else if (message.body.toUpperCase().includes('!REMIND') && message.body.toUpperCase().includes('AFTER')) { // Then it is command no.9
+            // Example: !remind all after 2d 3h 5m / Will be reminded after 2 days, 2 hours and 5 mins
+            let chatID = message.from;
+            let groupChat = await client.getChatById(chatID);
+            
+            let mentions = [];
+            let mentions_text = "";
+
+            if (message.body.toUpperCase().includes('ALL')) {
+                for(let participant of groupChat.participants) {
+                    mentions.push(await client.getContactById(participant.id._serialized));
+                    mentions_text += `@${participant.id.user} `;
+                }
+            }
+
+            time_string = message.body.toUpperCase().split('AFTER ')[1].split(' ');
+
+            moment_obj = moment();
+            time_string.forEach(element => {
+                console.log(`processing: ${element}`)
+                if (element.at(-1) === 'D') {
+                    moment_obj = moment_obj.add(Number(element.split('D')[0]), 'days')
+                } else if (element.at(-1) === 'M') {
+                    console.log(`adding minutes: ${element.split('M')[0]}`)
+                    moment_obj = moment_obj.add(Number(element.split('M')[0]), 'minutes')
+                } else if (element.at(-1) === 'H') {
+                    moment_obj = moment_obj.add(Number(element.split('H')[0]), 'hours')
+                }
+            });
+            let next_date = moment_obj.toDate();
+
+            reminder_ID = add_np_reminder(next_date, chatID, mentions_text, {mentions});
+  
+            await message.reply(`A new reminder was created with the number *${reminder_ID}*, to be reminded at ${next_date.toLocaleDateString("en-GB") + ` ${next_date.getHours()}:${next_date.getMinutes()}`}`);
         } else {
             console.log("Unsupported command!");
-            // TODO: Comment out the following line: 
             try {
                 console.log("the received command: " + JSON.stringify(messsage.body))
             } catch(err) {}
         }
     }
-
-}
- 
+  
+  }
+  
