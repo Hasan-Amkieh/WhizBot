@@ -15,12 +15,16 @@ let all_commands = [ // a command to description relation
   const __version__ = "1.1.0";
   var started_running_at = new Date();
   let command_count = 0;
+
+  const CITY_NOT_FOUND = "The city does not exist!"
   
   let np_reminders = {} // this will hold all non-prayer reminders for the whole application, these reminders are referred as np_reminders (np - non-prayer)
   // The structure is the following: [Date Object, Chat ID, text of mentions for participants, Array of Contacts to be mentioned]
 
   let p_reminders = {} // These reminders are referred as p_reminders (p - prayers)
   // The structure is the following: [city, Chat ID, Array of Contacts to be mentioned, Array of Prayers]
+
+  let reminder_callbacks = {} // {ID_ : NodeJS.timeout object}
 
   let prayers = ["fajr", "dhuhr", "asr", "maghrib", "isha"]
   let upcoming_prayer_indices = {}; // {ID_ : index}
@@ -52,13 +56,17 @@ let all_commands = [ // a command to description relation
           console.error(error);
       });
 
-      let str = response_['items'][0]['date_for'].split('-'); // ex. 2023-4-15
-  
-      let last_prayer_update = new Date(Number(str[0]), Number(str[1]) - 1, Number(str[2]));
+      if (!response_['status_description'].toUpperCase().includes("FAILED")) {
+        let str = response_['items'][0]['date_for'].split('-'); // ex. 2023-4-15
+        let last_prayer_update = new Date(Number(str[0]), Number(str[1]) - 1, Number(str[2]));
 
-      prayers_details_by_city[city] = [last_prayer_update, summarize_prayers(response_)];
+        prayers_details_by_city[city] = [last_prayer_update, summarize_prayers(response_)];
 
-      console.log(`last prayer update ${last_prayer_update.getTime()}`)
+        console.log(`last prayer update ${last_prayer_update.getTime()}`)
+      } else {
+        console.log("CITY ERROR!")
+        return CITY_NOT_FOUND
+      }
   
       return response_;
   }
@@ -151,11 +159,11 @@ let all_commands = [ // a command to description relation
         upcoming_prayer_indices[ID_] = upcoming_prayer_indices[ID_] + 1;
     }
 
-    /*// TEST: to be deleted:
+    // TEST: to be deleted:
     prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]] = moment().add(1, 'minutes').toDate();
-    //TEST;*/
+    //TEST;
 
-    setTimeout(function() {process_p_reminder(ID_)}, prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]].getTime() - new Date().getTime());
+    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]].getTime() - new Date().getTime());
 
   };
 
@@ -191,12 +199,12 @@ let all_commands = [ // a command to description relation
     obj = await get_next_prayer_date(city);
     upcoming_prayer_indices[ID_] = obj[0];
 
-    /*/ TEST: to be deleted:
+    // TEST: to be deleted:
     obj[1] = moment().add(1, 'minutes').toDate();
-    // TEST;*/
+    // TEST;
 
     console.log(`index: ${obj[0]}`)
-    setTimeout(function() {process_p_reminder(ID_)}, obj[1].getTime() - new Date().getTime());
+    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, obj[1].getTime() - new Date().getTime());
 
     obj.push(ID_)
     return obj;
@@ -232,7 +240,7 @@ let all_commands = [ // a command to description relation
 
     np_reminders[ID_] = [date, chat, mentions_text, msg_options];
 
-    setTimeout(async () => {
+    reminder_callbacks[ID_] = setTimeout(async () => {
         
         await (await client.getChatById(np_reminders[ID_][1])).sendMessage(`Reminder No. ${ID_} ${np_reminders[ID_][2]} is triggered`, np_reminders[ID_][3]);
         delete np_reminders[ID_];
@@ -288,7 +296,7 @@ let all_commands = [ // a command to description relation
   async function processMessage(message) {
      
   if (message.body[0] === '!') { // Then it is a command:
-        if(message.body.toUpperCase() === '!Get All Prayers'.toUpperCase()) {
+        if(message.body.toUpperCase() === '!GET ALL PRAYERS') {
             ++command_count;
             received_result = false;
             await get_all_prayers().then((result) => {
@@ -297,8 +305,12 @@ let all_commands = [ // a command to description relation
                 console.error(err);
             });
   
-            await message.reply(summarize_prayers(response));
-        } else if(message.body.toUpperCase().includes('!Get All Prayers for '.toUpperCase())) {
+            if (response == CITY_NOT_FOUND) {
+                await message.reply(response);
+            } else {
+                await message.reply(summarize_prayers(response));
+            }
+        } else if(message.body.toUpperCase().includes('!GET ALL PRAYERS FOR ')) {
             ++command_count;
             received_result = false;
             await get_all_prayers(message.body.split(" ").at(-1)).then((result) => {
@@ -307,14 +319,18 @@ let all_commands = [ // a command to description relation
                 console.error(err);
             });
   
-            await message.reply(summarize_prayers(response));
-        } else if (message.body.toUpperCase() === '!About'.toUpperCase()) {
+            if (response == CITY_NOT_FOUND) {
+                await message.reply(response);
+            } else {
+                await message.reply(summarize_prayers(response));
+            }
+        } else if (message.body.toUpperCase() === '!ABOUT') {
             ++command_count;
             let runtime_mins = new Date().getTime() - started_running_at.getTime();
             runtime_mins = runtime_mins / (1000.0 * 60.0);
             runtime_mins = runtime_mins.toFixed(2);
             await message.reply(get_about_msg());
-        } else if (message.body.toUpperCase() === '!Commands'.toUpperCase()) {
+        } else if (message.body.toUpperCase() === '!COMMANDS') {
             ++command_count;
             answer = "";
             all_commands.forEach(element => {
@@ -322,7 +338,7 @@ let all_commands = [ // a command to description relation
             });
 
             await message.reply(answer);
-        } else if (message.body.toUpperCase() === '!mention all'.toUpperCase()) {
+        } else if (message.body.toUpperCase() === '!MENTION ALL') {
             ++command_count;
             let chatID = message.from;
             let groupChat = await client.getChatById(chatID);
@@ -344,7 +360,6 @@ let all_commands = [ // a command to description relation
 
             let chatID = message.from;
             let groupChat = await client.getChatById(chatID);
-            let arr_ = message.body.split(' ');
             
             let mentions = [];
             let mentions_text = "";
@@ -357,11 +372,15 @@ let all_commands = [ // a command to description relation
             }
 
             city = message.body.toUpperCase().split("FOR ")[1].toLowerCase()
-            obj = await add_p_reminder(city, chatID, mentions_text, {mentions}, prayers);
-            let next_prayer = obj[1];
-            await message.reply(`A new reminder was created with the number *${obj[2]}*,`+
-            ` *${prayers[obj[0]]}* to be reminded at ${next_prayer.getHours()}:${next_prayer.getMinutes()}`);
-
+            let response__ = await get_all_prayers(city);
+            if (response__ == CITY_NOT_FOUND) {
+                await message.reply(response__);
+            } else {
+                obj = await add_p_reminder(city, chatID, mentions_text, {mentions}, prayers);
+                let next_prayer = obj[1];
+                await message.reply(`A new reminder was created with the number *${obj[2]}*,`+
+                ` *${prayers[obj[0]]}* to be reminded at ${next_prayer.getHours()}:${next_prayer.getMinutes()}`);
+            }
         } else if (message.body.toUpperCase().includes('!REMIND') && message.body.toUpperCase().includes('AT')) { // command no.7
             // Example: !remind all at 14/4 19:17
             ++command_count;
@@ -452,17 +471,21 @@ let all_commands = [ // a command to description relation
             let chatID = message.from;
             let ID_ = Number(message.body.toUpperCase().split("REMINDER ")[1]);
 
-            let response = '';
+            let response = `Reminder No.${ID_} has been deleted!`;
             if (ID_ in p_reminders) {
                 if (chatID === p_reminders[ID_][1]) {
                     delete p_reminders[ID_];
                     delete upcoming_prayer_indices[ID_];
+                    clearTimeout(reminder_callbacks[ID_])
+                    delete reminder_callbacks[ID_];
                 } else {
                     response = `There is no reminder with the number ${ID_}`;
                 }
             } else if (ID_ in np_reminders) {
                 if (chatID === np_reminders[ID_][1]) {
                     delete np_reminders[ID_];
+                    clearTimeout(reminder_callbacks[ID_])
+                    delete reminder_callbacks[ID_];
                 } else {
                     response = `There is no reminder with the number ${ID_}`;
                 }
