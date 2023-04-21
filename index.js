@@ -2,14 +2,15 @@
 let all_commands = [ // a command to description relation
     "1.  !commands - Get the list of all commands with an explanation",
     "2.  !about - Get general information/statistics about the WhizBot",
-    "3.  !get all prayers - Get the upcoming prayers for Turkey/Ankara",
-    "4.  !get all prayers for *[city]* - Get all the upcoming prayers for the chosen *city*",
-    "5.  !mention all - Mentions everyone inside the group",
-    "6.  !remind *[all]* on prayers for *[for [city]]* - Automatically reminds after the prayer by 5 minutes, if *all* is set everyone will be menitoned",
-    "7.  !remind *[all]* at *[time]* - Reminds once at the specificied *time*, if *all* is set then all will be mentioned, \nExample: '!remind all at 21/4 15:17'",
-    "8.  !remind *[all]* after *[time]* - Reminds once after *time*. Example: remind after 2d 3h 5m . d for days, h for hours and m for minutes",
-    "9.  !get all reminders - Returns all reminders set inside this chat only",
-    "10. !delete reminder *[reminder ID]* - Deletes the reminder using the reminder",
+    "3.  !get currency *[currency]* - returns the exchange rate of the chosen currency pair, e.g. TL/USD",
+    "4.  !get all prayers - Get the upcoming prayers for Turkey/Ankara",
+    "5.  !get all prayers for *[city]* - Get all the upcoming prayers for the chosen *city*",
+    "6.  !mention all - Mentions everyone inside the group",
+    "7.  !remind *[all]* on prayers for *[for [city]]* - Automatically reminds after the prayer by 5 minutes, if *all* is set everyone will be menitoned",
+    "8.  !remind *[all]* at *[time]* - Reminds once at the specificied *time*, if *all* is set then all will be mentioned, \nExample: '!remind all at 21/4 15:17'",
+    "9.  !remind *[all]* after *[time]* - Reminds once after *time*. Example: remind after 2d 3h 5m . d for days, h for hours and m for minutes",
+    "10. !get all reminders - Returns all reminders set inside this chat only",
+    "11. !delete reminder *[reminder ID]* - Deletes the reminder using the reminder",
 ]
   
   const __version__ = "1.1.0";
@@ -17,6 +18,7 @@ let all_commands = [ // a command to description relation
   let command_count = 0;
 
   const CITY_NOT_FOUND = "The city does not exist!"
+  const UNAVAILABLE_CURRENCY = "The requested currency is unavailable!";
   
   let np_reminders = {} // this will hold all non-prayer reminders for the whole application, these reminders are referred as np_reminders (np - non-prayer)
   // The structure is the following: [Date Object, Chat ID, text of mentions for participants, Array of Contacts to be mentioned]
@@ -160,10 +162,14 @@ let all_commands = [ // a command to description relation
     }
 
     // TEST: to be deleted:
-    prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]] = moment().add(1, 'minutes').toDate();
+    //prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]] = moment().add(1, 'minutes').toDate();
     //TEST;
 
-    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]].getTime() - new Date().getTime());
+    let ms_to_wait = prayers_times_by_city[p_reminders[ID_][0]][upcoming_prayer_indices[ID_]].getTime() - Date.now();
+    while (ms_to_wait < 0) {
+        ms_to_wait += 86400000; // equals to a day in ms
+    }
+    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, ms_to_wait);
 
   };
 
@@ -200,12 +206,15 @@ let all_commands = [ // a command to description relation
     upcoming_prayer_indices[ID_] = obj[0];
 
     // TEST: to be deleted:
-    obj[1] = moment().add(1, 'minutes').toDate();
+    //obj[1] = moment().add(1, 'minutes').toDate();
     // TEST;
 
     console.log(`index: ${obj[0]}`)
-    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, obj[1].getTime() - new Date().getTime());
-
+    let ms_to_wait = obj[1].getTime() - Date.now();
+    while (ms_to_wait < 0) {
+        ms_to_wait += 86400000; // equals to a day in ms
+    }
+    reminder_callbacks[ID_] = setTimeout(function() {process_p_reminder(ID_)}, ms_to_wait);
     obj.push(ID_)
     return obj;
 
@@ -272,6 +281,33 @@ let all_commands = [ // a command to description relation
     return new Date(new Date().getFullYear(), month - 1, day, hours, minutes);
 
   }
+
+  async function get_currency(from_cur, to_cur) {
+
+    const options = {
+        method: 'GET',
+        url: 'https://currency-converter-by-api-ninjas.p.rapidapi.com/v1/convertcurrency',
+        params: {have: from_cur, want: to_cur, amount: '1'},
+        headers: {
+        'X-RapidAPI-Key': '1f2ac0471amsh9d24d9ba56c6564p10d1aejsnee5f204638e9',
+        'X-RapidAPI-Host': 'currency-converter-by-api-ninjas.p.rapidapi.com'
+        }
+    };
+
+    let response_;
+    await axios.request(options).then(function (response) {
+        if ("error" in response.data && response.data["error"].toUpperCase().includes("INVALID CURRENCIES")) {
+            response_ = UNAVAILABLE_CURRENCY;
+        } else {
+	        response_ = response.data["new_amount"];
+        }
+    }).catch(function (error) {
+        response_ = UNAVAILABLE_CURRENCY;
+    });
+
+    return response_;
+
+  }
   
   const qrcode = require('qrcode-terminal')
   const WAWebJS = require("whatsapp-web.js")
@@ -310,7 +346,24 @@ let all_commands = [ // a command to description relation
             } else {
                 await message.reply(summarize_prayers(response));
             }
-        } else if(message.body.toUpperCase().includes('!GET ALL PRAYERS FOR ')) {
+        } else if (message.body.toUpperCase().includes('!GET CURRENCY ')) { // e.g: !GET CURRENCY TRY/USD // NOTE: the currency has to be 3-letters long, check it first
+            
+            let tmp_ = message.body.toUpperCase().split("CURRENCY ")[1].split("/");
+            let response = "";
+            if (tmp_[0].length == 3 && tmp_[1].length == 3) {
+                let result = await get_currency(tmp_[0], tmp_[1]);
+                if (result === UNAVAILABLE_CURRENCY) {
+                    response = UNAVAILABLE_CURRENCY;
+                } else {
+                    response = `${result} ${tmp_[0]}/${tmp_[1]}`;
+                }
+            } else {
+                response = "The currency should be 3-letters long!";
+            }
+
+            await message.reply(response);
+
+         } else if(message.body.toUpperCase().includes('!GET ALL PRAYERS FOR ')) {
             ++command_count;
             received_result = false;
             await get_all_prayers(message.body.split(" ").at(-1)).then((result) => {
